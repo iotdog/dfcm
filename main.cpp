@@ -89,7 +89,7 @@ double predict(double prev, double delta1, double delta2, double delta3, double 
     auto iter = hashTable->find(index);
     double pred = 0;
     // dpreds的值是如何得来的？？？
-    if (iter == hashTable->end()) // 索引（Hash值）不存在
+    if (iter == hashTable->end()) // 索引（Hash值）不存在，新建入口
     {
         double *dpreds = new (double[3]);
         dpreds[0] = 1; // 标识下一次是更新dpred'还是dpred"
@@ -98,7 +98,7 @@ double predict(double prev, double delta1, double delta2, double delta3, double 
         pred = prev + compute_dpred(dpreds[1], dpreds[2]);
         hashTable->insert({index, dpreds});
     }
-    else // 索引（Hash值）已存在
+    else // 索引（Hash值）已存在，更新预测值
     {
         double *dpreds = iter->second;
         int tmpIdx;
@@ -137,7 +137,7 @@ void compress_dfcm(std::vector<double> *data, std::unordered_map<int, double *> 
             double pred = predict(data->at(i - 1),
                                   data->at(i - 1) - data->at(i - 2),
                                   data->at(i - 2) - data->at(i - 3),
-                                  data->at(i - 3) - data->at(i - 4), data->at(i) - data->at(i - 1), hashTable);
+                                  data->at(i - 3) - data->at(i - 4), data->at(i - 1) - data->at(i - 2), hashTable);
             std::cout << "real: " << data->at(i) << ", pred: " << pred << std::endl;
             compressor.CompressAcross(pred, data->at(i));
         }
@@ -216,7 +216,7 @@ int main(int argc, char **argv)
     std::cout << "hash table size: " << hashTable.size() << std::endl;
     // compress_simple(&data);
 
-    // 保存Hash表并释放内存
+    // 输出Hash表并释放内存
     for (auto iter = hashTable.begin(); iter != hashTable.end(); ++iter)
     {
         std::cout << iter->first << ": [" << iter->second[1] << ", " << iter->second[2] << "]" << std::endl;
