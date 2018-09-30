@@ -53,9 +53,15 @@ void save(const std::string filename, std::vector<double> *data)
 
 int hash_func(double delta1, double delta2, double delta3)
 {
-    long long d1 = (long long)delta1;
-    long long d2 = (long long)delta2;
-    long long d3 = (long long)delta3;
+    long long d1, d2, d3;
+    if(sizeof(long long) != sizeof(double) || sizeof(double) != 8)
+    {
+        std::cerr << "wrong data size" << std::endl;
+        exit(1);
+    }
+    memcpy(&d1, &delta1, 8);
+    memcpy(&d2, &delta2, 8);
+    memcpy(&d3, &delta3, 8);
     // 取前14个bit
     d1 = d1 >> 50;
     d2 = d2 >> 50;
@@ -208,7 +214,7 @@ int main(int argc, char **argv)
 
     // 加载数据
     std::vector<double> data = {};
-    load("原始0.txt", &data);
+    load("0_float.txt", &data);
     std::cout << "data size: " << data.size() << std::endl;
 
     // 压缩
@@ -219,7 +225,7 @@ int main(int argc, char **argv)
     // 输出Hash表并释放内存
     for (auto iter = hashTable.begin(); iter != hashTable.end(); ++iter)
     {
-        std::cout << iter->first << ": [" << iter->second[1] << ", " << iter->second[2] << "]" << std::endl;
+        // std::cout << iter->first << ": [" << iter->second[1] << ", " << iter->second[2] << "]" << std::endl;
         free(iter->second);
     }
     hashTable.clear();
@@ -232,7 +238,7 @@ int main(int argc, char **argv)
     // data.clear();
     // decompress_simple("index_simple.txt", "content_simple.dat", &data);
     // std::cout << "decompressed data size: " << data.size() << std::endl;
-    // save("0.txt", &data);
+    // save("0_float.txt", &data);
 
     return 0;
 }
