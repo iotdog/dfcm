@@ -8,7 +8,7 @@
 /**
  * 加载数据
  */
-void load(const std::string filename, std::vector<double> *data)
+void load(const std::string filename, std::vector<float> *data)
 {
     std::fstream file;
     file.open(filename);
@@ -37,7 +37,7 @@ void load(const std::string filename, std::vector<double> *data)
     file.close();
 }
 
-void save(const std::string filename, std::vector<double> *data)
+void save(const std::string filename, std::vector<float> *data)
 {
     std::ofstream file;
     file.open(filename);
@@ -51,35 +51,32 @@ void save(const std::string filename, std::vector<double> *data)
     file.close();
 }
 
-int hash_func(double delta1, double delta2, double delta3)
+int hash_func(float delta1, float delta2, float delta3)
 {
-    long long d1, d2, d3;
-    if(sizeof(long long) != sizeof(double) || sizeof(double) != 8)
-    {
-        std::cerr << "wrong data size" << std::endl;
-        exit(1);
-    }
-    memcpy(&d1, &delta1, 8);
-    memcpy(&d2, &delta2, 8);
-    memcpy(&d3, &delta3, 8);
-    // 取前14个bit
-    d1 = d1 >> 50;
-    d2 = d2 >> 50;
-    d3 = d3 >> 50;
+    int d1, d2, d3;
+    memcpy(&d1, &delta1, 4);
+    memcpy(&d2, &delta2, 4);
+    memcpy(&d3, &delta3, 4);
+    // 浮点数数据结构：https://www.cnblogs.com/sunfan1988/p/3932714.html
+    // 取前11个bit：1符号位，8阶数位，2小数位
+    d1 = d1 >> 21;
+    d2 = d2 >> 21;
+    d3 = d3 >> 21;
     // 异或之后取最后的20个bit
     return 0xfffff & (d1 ^ (d2 << 5) ^ (d3 << 10));
 }
 
-double compute_dpred(double dpred1, double dpred2)
+float compute_dpred(float dpred1, float dpred2)
 {
-    if (dpred2 == std::numeric_limits<double>::max())
+    if (dpred2 == std::numeric_limits<float>::max())
     {
         return dpred1;
     }
-    // 比较前14字节是否相同
-    long long dp1 = (long long)dpred1;
-    long long dp2 = (long long)dpred2;
-    if ((dp1 >> 50) == (dp2 >> 50))
+    // 比较前11字节是否相同
+    int dp1, dp2;
+    memcpy(&dp1, &dpred1, 4);
+    memcpy(&dp2, &dpred2, 4);
+    if ((dp1 >> 21) == (dp2 >> 21))
     {
         return dpred1;
     }
@@ -89,37 +86,38 @@ double compute_dpred(double dpred1, double dpred2)
     }
 }
 
-double predict(double prev, double delta1, double delta2, double delta3, double dpred, std::unordered_map<int, double *> *hashTable)
+float predict(float prev, float delta1, float delta2, float delta3, float dpred_new, std::unordered_map<int, float *> *hashTable)
 {
     int index = hash_func(delta1, delta2, delta3);
     auto iter = hashTable->find(index);
-    double pred = 0;
-    // dpreds的值是如何得来的？？？
+    float pred = 0;
     if (iter == hashTable->end()) // 索引（Hash值）不存在，新建入口
     {
-        double *dpreds = new (double[3]);
-        dpreds[0] = 1; // 标识下一次是更新dpred'还是dpred"
-        dpreds[1] = dpred;
-        dpreds[2] = std::numeric_limits<double>::max(); // 未填充的字段暂时使用MAX标识
-        pred = prev + compute_dpred(dpreds[1], dpreds[2]);
+        float *dpreds = new (float[3]);
+        dpreds[0] = 2; // 标识下一次是更新dpred'还是dpred"
+        dpreds[1] = dpred_new;
+        dpreds[2] = std::numeric_limits<float>::max(); // 未填充的字段暂时使用MAX标识
         hashTable->insert({index, dpreds});
+        std::cout << "new hash table entry: " << index << ": [" << dpreds[0] << ", " << dpreds[1] << ", " << dpreds[2] << "]" << std::endl;
+        // 此时没有预测值
+        return std::numeric_limits<float>::max();
     }
     else // 索引（Hash值）已存在，更新预测值
     {
-        double *dpreds = iter->second;
-        int tmpIdx;
-        if (dpreds[0] == 0)
+        float *dpreds = iter->second;
+        pred = prev + compute_dpred(dpreds[1], dpreds[2]);
+        // 更新预测值
+        if (dpreds[0] == 2)
         {
-            tmpIdx = 1;
+            dpreds[2] = dpred_new;
             dpreds[0] = 1;
         }
         else
         {
-            tmpIdx = 2;
-            dpreds[0] = 0;
+            dpreds[1] = dpred_new;
+            dpreds[0] = 2;
         }
-        dpreds[tmpIdx] = dpred;
-        pred = prev + compute_dpred(dpreds[1], dpreds[2]);
+        std::cout << "update hash table entry: " << index << ": [" << dpreds[0] << ", " << dpreds[1] << ", " << dpreds[2] << "]" << std::endl;
     }
     return pred;
 }
@@ -127,7 +125,7 @@ double predict(double prev, double delta1, double delta2, double delta3, double 
 /**
  * 使用DFCM预测器压缩
  */
-void compress_dfcm(std::vector<double> *data, std::unordered_map<int, double *> *hashTable)
+void compress_dfcm(std::vector<float> *data, std::unordered_map<int, float *> *hashTable)
 {
     FloatCompressorNew compressor;
     compressor.SetupCompressor(NULL);
@@ -140,37 +138,73 @@ void compress_dfcm(std::vector<double> *data, std::unordered_map<int, double *> 
         }
         else
         {
-            double pred = predict(data->at(i - 1),
-                                  data->at(i - 1) - data->at(i - 2),
-                                  data->at(i - 2) - data->at(i - 3),
-                                  data->at(i - 3) - data->at(i - 4), data->at(i - 1) - data->at(i - 2), hashTable);
-            std::cout << "real: " << data->at(i) << ", pred: " << pred << std::endl;
-            compressor.CompressAcross(pred, data->at(i));
+            float pred = predict(data->at(i - 1),
+                                 data->at(i - 1) - data->at(i - 2),
+                                 data->at(i - 2) - data->at(i - 3),
+                                 data->at(i - 3) - data->at(i - 4), data->at(i) - data->at(i - 1), hashTable);
+            if (std::numeric_limits<float>::max() == pred) // 没有预测值，简单压缩
+            {
+                compressor.CompressNone(data->at(i));
+            }
+            else
+            {
+                std::cout << "real: " << data->at(i) << ", pred: " << pred << std::endl;
+                compressor.CompressAcross(pred, data->at(i));
+            }
         }
     }
     compressor.FinishCompressor();
     compressor.SaveChars("index_dfcm.txt", "content_dfcm.dat");
 }
 
-void decompress_dfcm(const std::string idx_file, const std::string content_file, std::vector<double> *data)
+void decompress_dfcm(const std::string idx_file, const std::string content_file, std::vector<float> *data)
 {
-    std::unordered_map<int, double *> hashTable;
+    std::unordered_map<int, float *> hashTable;
     FloatCompressorNew decompressor;
     decompressor.NewSetupDC(idx_file, content_file);
     int data_size = decompressor.DecompressNone();
     for (int i = 0; i < data_size; i++)
     {
-        if (i - 4 < 0) 
+        if (i - 4 < 0)
         {
             data->push_back(decompressor.DecompressNone());
         }
         else
         {
-            double pred = predict(data->at(i - 1),
-                                  data->at(i - 1) - data->at(i - 2),
-                                  data->at(i - 2) - data->at(i - 3),
-                                  data->at(i - 3) - data->at(i - 4), data->at(i - 1) - data->at(i - 2), &hashTable);
-            data->push_back(decompressor.DecompressAcross(pred));
+            float delta1, delta2, delta3;
+            delta1 = data->at(i - 1) - data->at(i - 2);
+            delta2 = data->at(i - 2) - data->at(i - 3);
+            delta3 = data->at(i - 3) - data->at(i - 4);
+            int index = hash_func(delta1, delta2, delta3);
+            auto iter = hashTable.find(index);
+            if (iter == hashTable.end()) // 索引（Hash值）不存在，新建入口
+            {
+                // 此时没有预测值
+                data->push_back(decompressor.DecompressNone());
+                float *dpreds = new (float[3]);
+                dpreds[0] = 2; // 标识下一次是更新dpred'还是dpred"
+                dpreds[1] = data->at(i) - data->at(i - 1);
+                dpreds[2] = std::numeric_limits<float>::max(); // 未填充的字段暂时使用MAX标识
+                hashTable.insert({index, dpreds});
+            }
+            else
+            {
+                float *dpreds = iter->second;
+                float pred = data->at(i - 1) + compute_dpred(dpreds[1], dpreds[2]);
+                data->push_back(decompressor.DecompressAcross(pred));
+                float dpredNew = data->at(i) - data->at(i - 1);
+                // 更新预测值
+                if (dpreds[0] == 2)
+                {
+                    dpreds[2] = dpredNew;
+                    dpreds[0] = 1;
+                }
+                else
+                {
+                    dpreds[1] = dpredNew;
+                    dpreds[0] = 2;
+                }
+            }
         }
     }
     decompressor.FinishDecompressor();
@@ -179,7 +213,7 @@ void decompress_dfcm(const std::string idx_file, const std::string content_file,
 /**
  * 简单压缩
  */
-void compress_simple(std::vector<double> *data)
+void compress_simple(std::vector<float> *data)
 {
     FloatCompressorNew compressor;
     compressor.SetupCompressor(NULL);
@@ -195,7 +229,7 @@ void compress_simple(std::vector<double> *data)
 /**
  * 简单解压
  */
-void decompress_simple(const std::string idx_file, const std::string content_file, std::vector<double> *data)
+void decompress_simple(const std::string idx_file, const std::string content_file, std::vector<float> *data)
 {
     FloatCompressorNew decompressor;
     decompressor.NewSetupDC(idx_file, content_file);
@@ -209,11 +243,18 @@ void decompress_simple(const std::string idx_file, const std::string content_fil
 
 int main(int argc, char **argv)
 {
+    std::cout << "size of float: " << sizeof(float) << std::endl;
+    std::cout << "size of int: " << sizeof(int) << std::endl;
+    if (sizeof(float) != sizeof(int))
+    {
+        std::cerr << "incompatible size" << std::endl;
+        return 1;
+    }
     // 初始化Hash表
-    std::unordered_map<int, double *> hashTable;
+    std::unordered_map<int, float *> hashTable;
 
     // 加载数据
-    std::vector<double> data = {};
+    std::vector<float> data = {};
     load("0_float.txt", &data);
     std::cout << "data size: " << data.size() << std::endl;
 
@@ -231,10 +272,10 @@ int main(int argc, char **argv)
     hashTable.clear();
 
     // 解压缩
-    // data.clear();
-    // decompress_dfcm("index_hfcm.txt", "content_hfcm.dat", &data);
-    // std::cout << "decompressed data size: " << data.size() << std::endl;
-    // save("1.txt", &data);
+    data.clear();
+    decompress_dfcm("index_dfcm.txt", "content_dfcm.dat", &data);
+    std::cout << "decompressed data size: " << data.size() << std::endl;
+    save("1.txt", &data);
     // data.clear();
     // decompress_simple("index_simple.txt", "content_simple.dat", &data);
     // std::cout << "decompressed data size: " << data.size() << std::endl;
